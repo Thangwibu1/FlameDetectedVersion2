@@ -1,25 +1,19 @@
 /*
- * Mã nguồn cho ESP32: Tạo Web Server để theo dõi trạng thái LED, cảm biến Analog và Relay
+ * Mã nguồn cho ESP32: Tạo Web Server để theo dõi trạng thái các thiết bị
  * Mô tả:
  * - Kết nối ESP32 vào mạng WiFi.
- * - Đọc giá trị từ một cảm biến analog kết nối vào chân GPIO 33.
- * - Nếu giá trị analog < 300:
- * + Đèn LED ở chân D2 (GPIO 2) sẽ BẬT.
- * + Relay ở chân 26 sẽ được kích hoạt (xuất tín hiệu LOW).
- * - Ngược lại, đèn LED và Relay sẽ TẮT.
- * - Tạo một Web Server tại cổng 80.
- * - Khi truy cập vào địa chỉ IP của ESP32, một trang web sẽ hiển thị:
- * + Trạng thái hiện tại của đèn LED (BẬT/TẮT).
- * + Trạng thái hiện tại của Relay (BẬT/TẮT).
- * + Giá trị analog đo được từ cảm biến.
- * - Trang web sẽ tự động làm mới sau mỗi 1 giây để cập nhật thông tin.
+ * - Đọc giá trị từ cảm biến analog (chân 33) để điều khiển LED (chân 2) và Relay (chân 26).
+ * - Đọc giá trị từ cảm biến khí gas (chân 32) để điều khiển LED cảnh báo (chân 15).
+ * - Logic điều khiển:
+ * + Nếu giá trị cảm biến analog < 300: LED 1 và Relay BẬT.
+ * + Nếu giá trị cảm biến gas < 500: LED 2 (cảnh báo) BẬT.
+ * - Tạo một Web Server hiển thị trạng thái của tất cả các thiết bị và giá trị cảm biến.
+ * - Trang web tự động làm mới sau mỗi 1 giây.
  *
  * Hướng dẫn:
  * 1. Thay đổi `TEN_WIFI_CUA_BAN` và `MAT_KHAU_WIFI`.
- * 2. Kết nối LED vào chân D2 (GPIO 2).
- * 3. Kết nối cảm biến analog vào chân 33.
- * 4. Kết nối module relay vào chân 26.
- * 5. Nạp code vào board ESP32 và mở Serial Monitor để xem địa chỉ IP.
+ * 2. Kết nối các cảm biến và thiết bị vào đúng các chân đã khai báo.
+ * 3. Nạp code vào board ESP32 và mở Serial Monitor để xem địa chỉ IP.
  */
 
 #include <WiFi.h>
@@ -31,9 +25,12 @@ const char* password = "25061972";
 // ---------------------------------------------
 
 // Khai báo chân kết nối
-const int ledPin = 2;     // GPIO 2 (D2) cho LED
-const int sensorPin = 33; // GPIO 33 cho cảm biến analog
-const int relayPin = 26;  // GPIO 26 cho module relay
+const int ledPin = 2;         // GPIO 2 (D2) cho LED 1
+const int sensorPin = 33;     // GPIO 33 cho cảm biến analog 1
+const int relayPin = 26;      // GPIO 26 cho module relay
+
+const int led2Pin = 15;       // GPIO 15 cho LED cảnh báo gas
+const int gasSensorPin = 32;  // GPIO 32 cho cảm biến khí gas
 
 // Tạo một đối tượng WebServer lắng nghe trên cổng 80
 WebServer server(80);
@@ -53,8 +50,9 @@ const char* htmlPage = R"(
             display: flex;
             justify-content: center;
             align-items: center;
-            height: 100vh;
+            min-height: 100vh;
             margin: 0;
+            padding: 20px 0;
             background-color: #f0f2f5;
             color: #333;
         }
@@ -64,7 +62,7 @@ const char* htmlPage = R"(
             background-color: white;
             border-radius: 12px;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-            min-width: 320px;
+            min-width: 340px;
         }
         h1 {
             color: #0056b3;
@@ -72,15 +70,22 @@ const char* htmlPage = R"(
         }
         .section {
             margin-bottom: 25px;
+            padding-bottom: 25px;
+            border-bottom: 1px solid #eee;
+        }
+        .section:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
         }
         .section p {
             margin-bottom: 10px;
             font-size: 1.1em;
         }
         .status {
-            font-size: 2em;
+            font-size: 1.8em;
             font-weight: bold;
-            padding: 15px 30px;
+            padding: 12px 25px;
             border-radius: 8px;
             display: inline-block;
             min-width: 120px;
@@ -91,10 +96,14 @@ const char* htmlPage = R"(
         }
         .status-off {
             color: #fff;
+            background-color: #6c757d; /* Màu xám */
+        }
+        .status-alert {
+            color: #fff;
             background-color: #dc3545; /* Màu đỏ */
         }
         .sensor-value {
-            font-size: 2.2em;
+            font-size: 2em;
             font-weight: bold;
             color: #007bff;
             padding: 10px;
@@ -112,7 +121,7 @@ const char* htmlPage = R"(
         <h1>BẢNG ĐIỀU KHIỂN ESP32</h1>
         
         <div class="section">
-            <p>Trạng thái đèn LED:</p>
+            <p>Trạng thái đèn LED 1:</p>
             <div class="status %LED_CLASS%">%LED_STATE%</div>
         </div>
 
@@ -122,8 +131,18 @@ const char* htmlPage = R"(
         </div>
 
         <div class="section">
-            <p>Giá trị cảm biến Analog:</p>
+            <p>Giá trị cảm biến 1:</p>
             <div class="sensor-value">%ANALOG_VAL%</div>
+        </div>
+
+        <div class="section">
+            <p>Cảnh báo rò rỉ Gas:</p>
+            <div class="status %GAS_LED_CLASS%">%GAS_LED_STATE%</div>
+        </div>
+
+        <div class="section">
+            <p>Giá trị cảm biến Gas:</p>
+            <div class="sensor-value">%GAS_VAL%</div>
         </div>
 
         <p class="footer">Trang sẽ tự làm mới sau 1 giây.</p>
@@ -134,15 +153,17 @@ const char* htmlPage = R"(
 
 // Hàm xử lý yêu cầu đến trang chủ ("/")
 void handleRoot() {
-  // Đọc trạng thái hiện tại của các chân
+  // Đọc trạng thái hiện tại của các chân và cảm biến
   int ledState = digitalRead(ledPin);
-  int relayState = digitalRead(relayPin); // Đọc trạng thái relay
+  int relayState = digitalRead(relayPin);
   int sensorValue = analogRead(sensorPin);
+  int gasLedState = digitalRead(led2Pin);
+  int gasSensorValue = analogRead(gasSensorPin);
   
   // Tạo một bản sao của chuỗi HTML để chỉnh sửa
   String page = String(htmlPage);
   
-  // Thay thế placeholder của LED
+  // --- Thay thế placeholder cho Nhóm 1 (Cảm biến & Relay) ---
   if (ledState == HIGH) {
     page.replace("%LED_STATE%", "BẬT");
     page.replace("%LED_CLASS%", "status-on");
@@ -150,8 +171,6 @@ void handleRoot() {
     page.replace("%LED_STATE%", "TẮT");
     page.replace("%LED_CLASS%", "status-off");
   }
-
-  // Thay thế placeholder của Relay (Lưu ý: Relay kích hoạt mức THẤP)
   if (relayState == LOW) { // LOW là BẬT
     page.replace("%RELAY_STATE%", "BẬT");
     page.replace("%RELAY_CLASS%", "status-on");
@@ -159,9 +178,17 @@ void handleRoot() {
     page.replace("%RELAY_STATE%", "TẮT");
     page.replace("%RELAY_CLASS%", "status-off");
   }
-
-  // Thay thế placeholder của cảm biến
   page.replace("%ANALOG_VAL%", String(sensorValue));
+
+  // --- Thay thế placeholder cho Nhóm 2 (Cảm biến Gas) ---
+  if (gasLedState == HIGH) {
+    page.replace("%GAS_LED_STATE%", "CÓ GAS");
+    page.replace("%GAS_LED_CLASS%", "status-alert");
+  } else {
+    page.replace("%GAS_LED_STATE%", "AN TOÀN");
+    page.replace("%GAS_LED_CLASS%", "status-on");
+  }
+  page.replace("%GAS_VAL%", String(gasSensorValue));
   
   // Gửi trang web đã được cập nhật về cho trình duyệt
   server.send(200, "text/html", page);
@@ -189,12 +216,15 @@ void setup() {
   
   // Cấu hình chân
   pinMode(ledPin, OUTPUT);
-  pinMode(relayPin, OUTPUT); // Cấu hình chân relay là OUTPUT
+  pinMode(relayPin, OUTPUT);
   pinMode(sensorPin, INPUT); 
+  pinMode(led2Pin, OUTPUT);
+  pinMode(gasSensorPin, INPUT);
   
-  // Mặc định tắt LED và Relay khi khởi động
+  // Mặc định tắt các thiết bị khi khởi động
   digitalWrite(ledPin, LOW);
-  digitalWrite(relayPin, HIGH); // Tắt relay (kích hoạt mức thấp nên mức cao là tắt)
+  digitalWrite(relayPin, LOW); // Tắt relay (kích hoạt mức thấp)
+  digitalWrite(led2Pin, LOW);
 
   // Bắt đầu kết nối WiFi
   Serial.println();
@@ -225,16 +255,24 @@ void setup() {
 }
 
 void loop() {
-  // Đọc giá trị từ cảm biến
+
+  digitalWrite(relayPin, LOW);  // Bật Relay
+  // --- Xử lý logic cho Nhóm 1 ---
   int sensorValue = analogRead(sensorPin);
-  digitalWrite(relayPin, HIGH); // Đặt Relay ở mức cao (tắt)
-  // Điều khiển đèn LED và Relay dựa trên giá trị cảm biến
   if (sensorValue < 1000) {
-    digitalWrite(ledPin, HIGH); // Bật LED
-    digitalWrite(relayPin, LOW); 
-    delay(5000); // Bật Relay (kích hoạt mức thấp)
+    digitalWrite(ledPin, HIGH); // Bật LED 1
+    digitalWrite(relayPin, HIGH);
+    delay(5000); // Tắt Relay
   } else {
-    digitalWrite(ledPin, LOW);  // Tắt LED // Tắt Relay
+    digitalWrite(ledPin, LOW);  // Tắt LED 1
+  }
+
+  // --- Xử lý logic cho Nhóm 2 (Gas) ---
+  int gasSensorValue = analogRead(gasSensorPin);
+  if (gasSensorValue < 500) {
+    digitalWrite(led2Pin, HIGH); // Bật LED cảnh báo
+  } else {
+    digitalWrite(led2Pin, LOW);  // Tắt LED cảnh báo
   }
   
   // Lắng nghe và xử lý các yêu cầu từ client
