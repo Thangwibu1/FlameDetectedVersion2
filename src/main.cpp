@@ -1,6 +1,6 @@
-#define BLYNK_TEMPLATE_ID "TMPL6tEuNaziH"
-#define BLYNK_TEMPLATE_NAME "Gas and Flame Detected"
-#define BLYNK_AUTH_TOKEN "Omw9aha6FLFNRr46vMYGcZL9g51PWxng"
+#define BLYNK_TEMPLATE_ID "TMPL6RatetRbw"
+#define BLYNK_TEMPLATE_NAME "Flame Gas Warning"
+#define BLYNK_AUTH_TOKEN "qMAMg8LShVD1XBW7XzOing_-WvqBzwlS"
 #define BLYNK_PRINT Serial
 
 #include <WiFi.h>
@@ -11,11 +11,10 @@
 #include <UrlEncode.h>
 
 // --- THAY ĐỔI THÔNG TIN CỦA BẠN TẠI ĐÂY ---
-const char *ssid = "Trung Ngoc";
-const char *password = "25061972";
+const char *ssid = "Theeanhs";
+const char *password = "14032005";
 
 // --- URL GOOGLE SCRIPT ---
-// Lấy URL này từ hướng dẫn cài đặt Google Sheets ở dưới
 const char *G_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwV7dBY5gvMLbRPz53vmjE7-rTOqxVbu46nIZRnzYt5RnBz5NZnyHFKuSo2Hbh8YYHDLA/exec";
 // ---------------------------------------------
 
@@ -28,7 +27,7 @@ const int led2Pin = 15;      // GPIO 15 cho LED cảnh báo gas
 const int gasSensorPin = 32; // GPIO 32 cho cảm biến khí gas
 
 // --- Chân cho các linh kiện mới ---
-const int fanPin = 22;   // GPIO 22 cho quạt
+const int fanPin = 27;   // GPIO 22 cho quạt
 const int lightPin = 23; // GPIO 23 cho đèn
 
 // Biến toàn cục
@@ -39,8 +38,7 @@ String weather_temperature = "N/A";
 String weather_description = "N/A";
 
 // --- Biến cho việc ghi lịch sử mỗi 30 phút ---
-unsigned long previousLogTime = 0;
-const unsigned long logInterval = 10000; // 30 phút = 30 * 60 * 1000 mili giây
+const unsigned long logInterval = 10000; // 30 phút = 1,800,000 mili giây
 
 // Khởi tạo các server
 WebServer server(80);
@@ -166,81 +164,67 @@ const char *controlPage = R"(
 </html>
 )";
 
-// --- HÀM MỚI: Gửi dữ liệu lên Google Sheets ---
-void logToGoogleSheets(int gasValue)
-{
-  if (WiFi.status() == WL_CONNECTED)
-  {
-    HTTPClient http;
-    String url = String(G_SCRIPT_URL) + "?gasValue=" + String(gasValue);
 
-    Serial.print("Dang gui du lieu den Google Sheets: ");
-    Serial.println(url);
+// --- TASK ĐỂ GHI DỮ LIỆU GOOGLE SHEETS SONG SONG ---
+void logToSheetsTask(void *pvParameters) {
+  Serial.println("Task ghi du lieu Google Sheets da bat dau tren Core 0.");
+  
+  for (;;) {
+    if (WiFi.status() == WL_CONNECTED) {
+      HTTPClient http;
+      
+      int gasValue = analogRead(gasSensorPin);
+      String url = String(G_SCRIPT_URL) + "?gasValue=" + String(gasValue);
 
-    http.begin(url);
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    int httpCode = http.GET();
+      Serial.print("[Task] Dang gui du lieu dinh ky den Google Sheets: ");
+      Serial.println(gasValue);
+      
+      // Đặt timeout cho kết nối HTTP để tránh bị treo
+      http.begin(url);
+      http.setTimeout(10000); // Timeout 10 giây
+      http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+      
+      int httpCode = http.GET();
 
-    if (httpCode > 0)
-    {
-      Serial.printf("Google Sheets response code: %d\n", httpCode);
-      if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY)
-      {
-        String payload = http.getString();
-        Serial.println("Google Sheets response: " + payload);
+      if (httpCode > 0) {
+        Serial.printf("[Task] Google Sheets response code: %d\n", httpCode);
+        // Phải đọc response để giải phóng bộ đệm
+        http.getString(); 
+      } else {
+        Serial.printf("[Task] Loi khi gui den Google Sheets: %s\n", http.errorToString(httpCode).c_str());
       }
+      http.end();
+    } else {
+      Serial.println("[Task] Mat ket noi WiFi, bo qua viec ghi du lieu.");
     }
-    else
-    {
-      Serial.printf("Loi khi gui den Google Sheets: %s\n", http.errorToString(httpCode).c_str());
-    }
-    http.end();
-  }
-  else
-  {
-    Serial.println("Mat ket noi WiFi, khong the ghi du lieu len Google Sheets.");
+
+    vTaskDelay(logInterval / portTICK_PERIOD_MS);
   }
 }
+
 
 // Hàm chuyển đổi mã thời tiết WMO thành mô tả
 String getWeatherDescription(int code)
 {
   switch (code)
   {
-  case 0:
-    return "Trời quang";
-  case 1:
-    return "Gần quang";
-  case 2:
-    return "Mây rải rác";
-  case 3:
-    return "Nhiều mây";
-  case 45:
-    return "Sương mù";
-  case 48:
-    return "Sương mù đọng";
-  case 51:
-    return "Mưa phùn nhẹ";
-  case 53:
-    return "Mưa phùn vừa";
-  case 55:
-    return "Mưa phùn dày";
-  case 61:
-    return "Mưa nhỏ";
-  case 63:
-    return "Mưa vừa";
-  case 65:
-    return "Mưa to";
-  case 80:
-    return "Mưa rào nhẹ";
-  case 81:
-    return "Mưa rào vừa";
-  case 82:
-    return "Mưa rào to";
-  case 95:
-    return "Dông";
-  default:
-    return "Không xác định";
+  case 0: return "Trời quang";
+  case 1: return "Gần quang";
+  case 2: return "Mây rải rác";
+  case 3: return "Nhiều mây";
+  case 45: return "Sương mù";
+  case 48: return "Sương mù đọng";
+  case 51: return "Mưa phùn nhẹ";
+  case 53: return "Mưa phùn vừa";
+  case 55: return "Mưa phùn dày";
+  case 61: return "Mưa nhỏ";
+  case 63: return "Mưa vừa";
+  case 65: return "Mưa to";
+  case 80: return "Mưa rào nhẹ";
+  case 81: return "Mưa rào vừa";
+  case 82: return "Mưa rào to";
+  case 95: return "Dông";
+  default: return "Không xác định";
   }
 }
 
@@ -251,6 +235,7 @@ void getWeatherData()
   {
     HTTPClient http;
     http.begin("https://api.open-meteo.com/v1/forecast?latitude=10.82&longitude=106.63&current_weather=true");
+    http.setTimeout(10000); // Timeout 10 giây
     int httpCode = http.GET();
     if (httpCode > 0)
     {
@@ -313,8 +298,8 @@ void handleWeather()
 void handleControl()
 {
   String page = String(controlPage);
-  page.replace("%FAN_STATE%", digitalRead(fanPin) ? "BẬT" : "TẮT");
-  page.replace("%FAN_CLASS%", digitalRead(fanPin) ? "status-on" : "status-off");
+  page.replace("%FAN_STATE%", !digitalRead(fanPin) ? "BẬT" : "TẮT");
+  page.replace("%FAN_CLASS%", !digitalRead(fanPin) ? "status-on" : "status-off");
   page.replace("%LIGHT_STATE%", digitalRead(lightPin) ? "BẬT" : "TẮT");
   page.replace("%LIGHT_CLASS%", digitalRead(lightPin) ? "status-on" : "status-off");
   server.send(200, "text/html", page);
@@ -344,7 +329,7 @@ void runBlynkLogic()
 {
   int gasValue = analogRead(gasSensorPin);
   int sensorValue = analogRead(sensorPin);
-  if (gasValue < 600)
+  if (gasValue > 650)
   {
     digitalWrite(led2Pin, HIGH);
     if (Blynk.connected())
@@ -356,34 +341,13 @@ void runBlynkLogic()
   {
     digitalWrite(led2Pin, LOW);
   }
-  if (sensorValue < 1000)
-  {
-    if (Blynk.connected())
-    {
-      Blynk.logEvent("flame_detected", "Alert detected on Sensor 1!");
-    }
-  }
+  
 }
 
-// --- HÀM Ghi lại lịch sử giá trị Gas (ĐÃ CẬP NHẬT) ---
-void logGasHistory()
-{
-  unsigned long currentMillis = millis();
-  if (currentMillis - previousLogTime >= logInterval)
-  {
-    previousLogTime = currentMillis;
-    int gasValue = analogRead(gasSensorPin);
-    Serial.print(F("Ghi nhan dinh ky - Gia tri Gas: "));
-    Serial.println(gasValue);
-
-    // Gửi dữ liệu lên Google Sheets
-    logToGoogleSheets(gasValue);
-  }
-}
 
 void setup()
 {
-  Serial.begin(9600);
+  Serial.begin(9600); // Tăng tốc độ baud để xem log khởi động chi tiết
 
   pinMode(ledPin, OUTPUT);
   pinMode(relayPin, OUTPUT);
@@ -394,18 +358,26 @@ void setup()
   pinMode(lightPin, OUTPUT);
 
   digitalWrite(ledPin, LOW);
-  digitalWrite(relayPin, LOW);
+  digitalWrite(relayPin, HIGH);
   digitalWrite(led2Pin, LOW);
-  digitalWrite(fanPin, LOW);
   digitalWrite(lightPin, LOW);
+  digitalWrite(fanPin, HIGH); // Đặt fanPin thành HIGH để quạt TẮT khi khởi động
 
   Serial.print("Dang ket noi den WiFi: ");
   Serial.println(ssid);
   WiFi.begin(ssid, password);
+  
+  // SỬA LỖI: Thêm timeout cho kết nối WiFi để không bị treo vô hạn
+  unsigned long startConnectTime = millis();
   while (WiFi.status() != WL_CONNECTED)
   {
     delay(500);
     Serial.print(".");
+    if (millis() - startConnectTime > 20000) { // Timeout sau 20 giây
+        Serial.println("\nKhong the ket noi WiFi!");
+        // Cân nhắc khởi động lại hoặc chạy ở chế độ offline
+        return; 
+    }
   }
   Serial.println("\nDa ket noi WiFi!");
   Serial.print("Dia chi IP cua ESP32: ");
@@ -426,6 +398,17 @@ void setup()
   server.onNotFound(handleNotFound);
   server.begin();
   Serial.println("Web Server da khoi dong");
+
+  // SỬA LỖI: Tăng kích thước stack cho task để tránh lỗi tràn bộ nhớ
+  // khi thực hiện các yêu cầu HTTPS.
+  xTaskCreatePinnedToCore(
+      logToSheetsTask,   // Hàm task sẽ chạy
+      "LogToSheetsTask", // Tên của task (dùng để debug)
+      8192,              // Kích thước stack (tăng từ 4096 lên 8192)
+      NULL,              // Tham số truyền vào task (không dùng)
+      1,                 // Độ ưu tiên của task (1 là thấp)
+      NULL,              // Handle của task (không dùng)
+      0);                // Chạy task trên Core 0 (lõi xử lý phụ)
 }
 
 void loop()
@@ -436,17 +419,24 @@ void loop()
   }
   server.handleClient();
   runBlynkLogic();
-  logGasHistory();
-
+  
   int sensorValue1 = analogRead(sensorPin);
   if (sensorValue1 < 1000)
   {
     digitalWrite(ledPin, HIGH);
-    digitalWrite(relayPin, HIGH);
+    digitalWrite(relayPin, LOW);
+    if (Blynk.connected())
+    {
+      Blynk.logEvent("flame_detected", "Alert detected on Sensor 1!");
+    }
+    delay(5000);
   }
   else
   {
     digitalWrite(ledPin, LOW);
-    digitalWrite(relayPin, LOW);
+    digitalWrite(relayPin, HIGH);
   }
+  
+  // Thêm một delay nhỏ để nhường thời gian xử lý cho các tác vụ khác
+  delay(10); 
 }
